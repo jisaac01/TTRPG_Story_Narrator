@@ -7,7 +7,7 @@ name = "ttrpg-narrator"
 version = "0.1.0"
 description = "Turn TTRPG session recordings into narrative prose summaries"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["ttrpg", "dnd", "transcription", "whisper", "narrative", "ai"]
 dependencies = [

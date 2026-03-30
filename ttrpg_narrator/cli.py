@@ -64,12 +64,6 @@ def cli() -> None:
     ),
 )
 @click.option(
-    "--gemini-api-key",
-    envvar="GEMINI_API_KEY",
-    default=None,
-    help="Gemini API key (can also be set via the GEMINI_API_KEY env var).",
-)
-@click.option(
     "--hf-token",
     envvar="HF_TOKEN",
     default=None,
@@ -127,7 +121,6 @@ def narrate(
     work_dir: Optional[Path],
     backend: str,
     model: Optional[str],
-    gemini_api_key: Optional[str],
     hf_token: Optional[str],
     whisper_model: str,
     device: str,
@@ -153,6 +146,10 @@ def narrate(
         output = input_folder / "story.md"
     if model is None:
         model = "llama3" if backend == "ollama" else "gemini-1.5-pro"
+
+    # Read the Gemini API key from the environment only — passing it on the
+    # command line would expose it in `ps aux` output and shell history.
+    gemini_api_key: Optional[str] = os.environ.get("GEMINI_API_KEY") or None
 
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -248,7 +245,14 @@ def narrate(
     # ---------------------------------------------------------------
     if not keep_work:
         import shutil
-        shutil.rmtree(work_dir, ignore_errors=True)
+        if work_dir.is_symlink():
+            click.echo(
+                f"[!] Skipping cleanup: '{work_dir}' is a symlink. "
+                "Remove it manually if desired.",
+                err=True,
+            )
+        else:
+            shutil.rmtree(work_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -351,19 +355,20 @@ def transcribe(
     show_default=True,
 )
 @click.option("--model", "-m", default=None)
-@click.option("--gemini-api-key", envvar="GEMINI_API_KEY", default=None)
 def write(
     transcript_json: Path,
     output: Optional[Path],
     backend: str,
     model: Optional[str],
-    gemini_api_key: Optional[str],
 ) -> None:
     """Phase 3+4 only: synthesize narrative prose from a transcript JSON."""
     if output is None:
         output = transcript_json.with_suffix(".md")
     if model is None:
         model = "llama3" if backend == "ollama" else "gemini-1.5-pro"
+
+    # Read the Gemini API key from the environment only.
+    gemini_api_key: Optional[str] = os.environ.get("GEMINI_API_KEY") or None
 
     click.echo(f"Loading transcript from '{transcript_json}'…")
     try:

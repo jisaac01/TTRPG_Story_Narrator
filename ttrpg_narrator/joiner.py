@@ -103,7 +103,11 @@ def concatenate_audio(files: List[Path], output_path: Path) -> Path:
     ) as list_file:
         list_path = Path(list_file.name)
         for fp in files:
-            list_file.write(f"file '{fp.resolve()}'\n")
+            # Escape backslashes then single-quotes so a filename like
+            # a'.m4a cannot break out of the quoted path and inject extra
+            # directives into the ffmpeg concat list.
+            escaped = str(fp.resolve()).replace("\\", "\\\\").replace("'", "\\'")
+            list_file.write(f"file '{escaped}'\n")
 
     try:
         subprocess.run(

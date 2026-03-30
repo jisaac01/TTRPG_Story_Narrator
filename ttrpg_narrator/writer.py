@@ -23,29 +23,30 @@ from ttrpg_narrator.transcriber import Segment
 
 
 # ---------------------------------------------------------------------------
-# Prompt templates
+# Prompt templates (system role only — transcript is passed as user content)
 # ---------------------------------------------------------------------------
 
-_CLEANER_PROMPT = """\
+# Keeping instructions in the system role and transcript data in the user
+# role prevents prompt-injection attacks where adversarial content in the
+# audio transcript could override these instructions.
+
+_CLEANER_SYSTEM = """\
 You are an editor processing a transcript from a tabletop RPG (TTRPG) session.
 Your task is to remove every "out-of-character" or "table talk" exchange — \
 things like passing snacks, rules questions ("What's the AC?"), \
 side conversations, or anything unrelated to the story being played.
 
-Below is the transcript as a JSON array.  Each element has the keys:
+The user will supply the transcript as a JSON array.  Each element has the keys:
   "start", "end", "speaker", "text"
 
 Return ONLY the segments that contain in-character actions, dialogue, or \
 story-relevant content.  Output valid JSON using the exact same schema — \
 no extra keys, no commentary, no markdown fences.
-
-Transcript:
-{transcript}
 """
 
-_STORYTELLER_PROMPT = """\
-You are a skilled fantasy author.  Below is a filtered transcript from a \
-tabletop RPG session, presented as a JSON array with speaker labels \
+_STORYTELLER_SYSTEM = """\
+You are a skilled fantasy author.  The user will supply a filtered transcript \
+from a tabletop RPG session, presented as a JSON array with speaker labels \
 (e.g. SPEAKER_00, SPEAKER_01).
 
 Your task: convert this transcript into richly written, third-person \
@@ -53,11 +54,6 @@ narrative prose.  Use the context to infer character names where possible; \
 otherwise refer to them as "the first adventurer", "the second adventurer", \
 etc.  Merge sequential actions and dialogue into flowing paragraphs.  \
 Do NOT simply list events — write it as an engaging story.
-
-Transcript:
-{transcript}
-
-Write the narrative story below:
 """
 
 
@@ -65,8 +61,8 @@ Write the narrative story below:
 # Backend helpers
 # ---------------------------------------------------------------------------
 
-def _call_ollama(prompt: str, model: str) -> str:
-    """Send *prompt* to a local Ollama instance and return the response text."""
+def _call_ollama(system: str, user: str, model: str) -> str:
+    """Send a system+user message pair to a local Ollama instance."""
     try:
         import ollama  # type: ignore
     except ImportError as exc:
@@ -76,13 +72,16 @@ def _call_ollama(prompt: str, model: str) -> str:
 
     response = ollama.chat(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
     )
     return response["message"]["content"]
 
 
-def _call_gemini(prompt: str, model: str, api_key: str) -> str:
-    """Send *prompt* to the Gemini API and return the response text."""
+def _call_gemini(system: str, user: str, model: str, api_key: str) -> str:
+    """Send a system+user message pair to the Gemini API."""
     try:
         import google.generativeai as genai  # type: ignore
     except ImportError as exc:
@@ -91,27 +90,28 @@ def _call_gemini(prompt: str, model: str, api_key: str) -> str:
         ) from exc
 
     genai.configure(api_key=api_key)
-    gemini_model = genai.GenerativeModel(model)
-    response = gemini_model.generate_content(prompt)
+    gemini_model = genai.GenerativeModel(model, system_instruction=system)
+    response = gemini_model.generate_content(user)
     return response.text
 
 
 def _llm_call(
-    prompt: str,
+    system: str,
+    user: str,
     backend: str,
     model: str,
     gemini_api_key: Optional[str] = None,
 ) -> str:
     """Dispatch an LLM call to the chosen *backend*."""
     if backend == "ollama":
-        return _call_ollama(prompt, model)
+        return _call_ollama(system, user, model)
     elif backend == "gemini":
         if not gemini_api_key:
             raise ValueError(
                 "A Gemini API key is required when using the 'gemini' backend. "
-                "Pass --gemini-api-key or set the GEMINI_API_KEY environment variable."
+                "Set the GEMINI_API_KEY environment variable."
             )
-        return _call_gemini(prompt, model, gemini_api_key)
+        return _call_gemini(system, user, model, gemini_api_key)
     else:
         raise ValueError(f"Unknown backend '{backend}'. Choose 'ollama' or 'gemini'.")
 
@@ -132,8 +132,7 @@ def clean_table_talk(
     original list unchanged if the LLM response cannot be parsed.
     """
     transcript_json = json.dumps(segments, indent=2, ensure_ascii=False)
-    prompt = _CLEANER_PROMPT.format(transcript=transcript_json)
-    raw = _llm_call(prompt, backend, model, gemini_api_key)
+    raw = _llm_call(_CLEANER_SYSTEM, transcript_json, backend, model, gemini_api_key)
 
     # Strip potential markdown fences from the LLM response
     text = raw.strip()
@@ -146,6 +145,10 @@ def clean_table_talk(
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines)
+
+    # Guard against excessively large LLM responses before parsing.
+    if len(text) > 10 * len(transcript_json):
+        return segments
 
     try:
         cleaned: List[Segment] = json.loads(text)
@@ -165,8 +168,7 @@ def generate_narrative(
 ) -> str:
     """Step B: Turn cleaned segments into third-person narrative prose."""
     transcript_json = json.dumps(segments, indent=2, ensure_ascii=False)
-    prompt = _STORYTELLER_PROMPT.format(transcript=transcript_json)
-    return _llm_call(prompt, backend, model, gemini_api_key)
+    return _llm_call(_STORYTELLER_SYSTEM, transcript_json, backend, model, gemini_api_key)
 
 
 # ---------------------------------------------------------------------------
