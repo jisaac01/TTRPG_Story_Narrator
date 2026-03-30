@@ -54,7 +54,7 @@ also removed `ignore_errors=True` so real failures surface.
 
 ## INFORMATIONAL
 
-### [ ] No Pin on Dependency Versions
+### [x] No Pin on Dependency Versions
 `requirements.txt` and `pyproject.toml` use `>=` lower-bounds only.
 A compromised upstream release of `whisperx`, `google-generativeai`, or
 `ollama` would be silently installed.
