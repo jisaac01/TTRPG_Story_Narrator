@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ttrpg-narrator"
+version = "0.1.0"
+description = "Turn TTRPG session recordings into narrative prose summaries"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["ttrpg", "dnd", "transcription", "whisper", "narrative", "ai"]
+dependencies = [
+    "click>=8.1",
+    "mutagen>=1.47",
+    "ffmpeg-python>=0.2.0",
+    "whisperx>=3.1.1",
+    "ollama>=0.4.0",
+    "google-generativeai>=0.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+ttrpg-narrator = "ttrpg_narrator.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ttrpg_narrator*"]
