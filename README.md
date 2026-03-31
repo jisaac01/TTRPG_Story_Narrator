@@ -13,7 +13,7 @@ recordings through four automated phases:
 | Phase | Name | What it does |
 |-------|------|--------------|
 | 1 | **The Joiner** | Sorts `.m4a` files by *Media Created* metadata, concatenates them with `ffmpeg`, and converts to a 16 kHz mono WAV. |
-| 2 | **The Ear** | Transcribes the WAV with [WhisperX](https://github.com/m-bain/whisperX) and diarizes speakers, producing a structured JSON transcript. |
+| 2 | **The Ear** | Transcribes the WAV with [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) (Apple Silicon native) and diarizes speakers with [pyannote.audio](https://github.com/pyannote/pyannote-audio), producing a structured JSON transcript. |
 | 3 | **The Writer** | Uses an LLM to (A) strip out-of-character "table talk" and (B) rewrite the remaining dialogue/actions as narrative prose. |
 | 4 | **Output** | Saves the finished story as a `.md` file. |
 
@@ -21,7 +21,8 @@ recordings through four automated phases:
 
 ## Requirements
 
-- Python ≥ 3.9
+- Python ≥ 3.11
+- Apple Silicon Mac (M1/M2/M3/M4) — mlx-whisper requires Apple MLX
 - [`ffmpeg`](https://ffmpeg.org/) installed and on `$PATH`
 - A HuggingFace access token (for speaker diarization via pyannote) — optional
   but recommended
@@ -67,7 +68,8 @@ ttrpg-narrator narrate ./recordings/
 This will:
 1. Find all `.m4a` files in `./recordings/`, sort them by creation timestamp,
    join and convert them to a WAV.
-2. Transcribe and diarize the WAV (speaker labels require `--hf-token`).
+2. Transcribe the WAV with mlx-whisper and diarize speakers with pyannote.audio
+   (speaker labels require `--hf-token`).
 3. Clean table talk and generate narrative prose with Ollama (`llama3` by
    default).
 4. Save the story to `./recordings/story.md`.
@@ -83,8 +85,7 @@ ttrpg-narrator narrate ./recordings/ \
   --backend gemini \
   --model gemini-1.5-pro \
   --hf-token "$HF_TOKEN" \
-  --whisper-model large-v2 \
-  --device cpu \
+  --whisper-model large-v3 \
   --num-speakers 4 \
   --keep-work
 ```
@@ -105,10 +106,9 @@ ttrpg-narrator narrate [OPTIONS] INPUT_FOLDER
 | `--work-dir / -w` | `<input_folder>/.narrator_work` | Intermediate file directory |
 | `--backend / -b` | `ollama` | LLM backend: `ollama` or `gemini` |
 | `--model / -m` | `llama3` / `gemini-1.5-pro` | Model name for the chosen backend |
-| `--hf-token` | `$HF_TOKEN` | HuggingFace token for diarization |
-| `--whisper-model` | `large-v2` | WhisperX model size |
-| `--device` | `cpu` | PyTorch device (`cpu`, `cuda`, `mps`) |
-| `--compute-type` | `int8` | Quantization (`int8`, `float16`, `float32`) |
+| `--hf-token` | `$HF_TOKEN` | HuggingFace token for pyannote diarization |
+| `--whisper-model` | `large-v3` | mlx-whisper model name or HuggingFace repo ID |
+| `--language` | `en` | Language code (skip auto-detection) |
 | `--num-speakers` | auto | Exact speaker count hint for diarization |
 | `--skip-join` | off | Skip Phase 1 (reuse existing WAV) |
 | `--skip-transcribe` | off | Skip Phase 2 (reuse existing JSON) |
@@ -172,7 +172,7 @@ ttrpg_narrator/
 ├── __init__.py           # Package version
 ├── cli.py                # Click CLI entry-point
 ├── joiner.py             # Phase 1: audio pre-processing
-├── transcriber.py        # Phase 2: WhisperX transcription + diarization
+├── transcriber.py        # Phase 2: mlx-whisper transcription + pyannote diarization
 └── writer.py             # Phase 3+4: LLM narrative synthesis + Markdown output
 pyproject.toml
 requirements.txt          # Abstract dependencies (lower-bound pins)
