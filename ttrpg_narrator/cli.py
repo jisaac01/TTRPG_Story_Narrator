@@ -17,7 +17,19 @@ from typing import Optional
 import click
 
 from ttrpg_narrator import __version__
-from ttrpg_narrator import joiner, transcriber, writer
+from ttrpg_narrator import joiner, transcriber as transcriber_mod, writer
+
+# Load .env file if present
+if os.path.exists('.env'):
+    with open('.env', 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                if line.startswith('export '):
+                    line = line[7:]
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -74,20 +86,33 @@ def cli() -> None:
     ),
 )
 @click.option(
-    "--whisper-model",
-    default="large-v2",
+    "--transcriber",
+    type=click.Choice(["whisperx", "ifw"], case_sensitive=False),
+    default="ifw",
     show_default=True,
-    help="WhisperX model size (e.g. 'large-v2', 'medium', 'small').",
+    help="Transcription backend ('whisperx' for accuracy with alignment, 'ifw' for speed).",
+)
+@click.option(
+    "--whisper-model",
+    default="large-v3",
+    show_default=True,
+    help="WhisperX model size (e.g. 'large-v3', 'large-v2', 'medium', 'small').",
 )
 @click.option(
     "--device",
-    default="cpu",
+    default="mps",
     show_default=True,
     help="PyTorch device ('cpu', 'cuda', 'mps').",
 )
 @click.option(
+    "--language",
+    default="en",
+    show_default=True,
+    help="Language code for WhisperX (e.g., 'en' to skip auto-detection).",
+)
+@click.option(
     "--compute-type",
-    default="int8",
+    default="float16",
     show_default=True,
     help="Quantization type ('int8', 'float16', 'float32').",
 )
@@ -122,8 +147,10 @@ def narrate(
     backend: str,
     model: Optional[str],
     hf_token: Optional[str],
+    transcriber: str,
     whisper_model: str,
     device: str,
+    language: str,
     compute_type: str,
     num_speakers: Optional[int],
     skip_join: bool,
@@ -139,6 +166,12 @@ def narrate(
       3. Write    — LLM cleans table talk, then writes narrative prose
       4. Output   — saves final story to a .md file
     """
+    # ---- Fix libavdevice conflict ----
+    import os
+    ffmpeg_lib = "/opt/homebrew/Cellar/ffmpeg@7/7.1.3_2/lib"
+    if ffmpeg_lib not in os.environ.get("DYLD_LIBRARY_PATH", ""):
+        os.environ["DYLD_LIBRARY_PATH"] = f"{ffmpeg_lib}:{os.environ.get('DYLD_LIBRARY_PATH', '')}"
+
     # ---- resolve defaults ----
     if work_dir is None:
         work_dir = input_folder / ".narrator_work"
@@ -194,7 +227,7 @@ def narrate(
             )
             sys.exit(1)
         click.echo(f"[2/4] Skipping transcription — using existing '{transcript_path}'.")
-        segments = transcriber.load_transcript(transcript_path)
+        segments = transcriber_mod.load_transcript(transcript_path)
     else:
         click.echo("[2/4] Transcribing and diarizing…")
         if not hf_token:
@@ -203,15 +236,17 @@ def narrate(
                 "Speaker diarization will be skipped."
             )
         try:
-            segments = transcriber.transcribe(
+            segments = transcriber_mod.transcribe(
                 wav_path,
+                transcriber=transcriber,
                 hf_token=hf_token,
                 model_name=whisper_model,
                 device=device,
+                language=language,
                 compute_type=compute_type,
                 num_speakers=num_speakers,
             )
-            transcriber.save_transcript(segments, transcript_path)
+            transcriber_mod.save_transcript(segments, transcript_path)
             click.echo(
                 f"      Transcript saved → {transcript_path} ({len(segments)} segments)"
             )
@@ -321,7 +356,7 @@ def transcribe(
 
     click.echo(f"Transcribing '{wav_file}'…")
     try:
-        segments = transcriber.transcribe(
+        segments = transcriber_mod.transcribe(
             wav_file,
             hf_token=hf_token,
             model_name=whisper_model,
@@ -329,7 +364,7 @@ def transcribe(
             compute_type=compute_type,
             num_speakers=num_speakers,
         )
-        transcriber.save_transcript(segments, output)
+        transcriber_mod.save_transcript(segments, output)
         click.echo(f"✓ Transcript saved → {output} ({len(segments)} segments)")
     except Exception as exc:
         click.echo(f"[!] Transcription failed: {exc}", err=True)
@@ -372,7 +407,7 @@ def write(
 
     click.echo(f"Loading transcript from '{transcript_json}'…")
     try:
-        segments = transcriber.load_transcript(transcript_json)
+        segments = transcriber_mod.load_transcript(transcript_json)
     except Exception as exc:
         click.echo(f"[!] Failed to load transcript: {exc}", err=True)
         sys.exit(1)

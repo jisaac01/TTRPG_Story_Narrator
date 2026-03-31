@@ -9,3 +9,9 @@ whisperx>=3.1.1
 # LLM backends
 ollama>=0.4.0
 google-generativeai>=0.8.0
+
+# PyTorch ecosystem (updated for compatibility)
+torch>=2.11.0
+torchvision>=0.26.0
+torchaudio>=2.11.0
+torchcodec>=0.11.0
