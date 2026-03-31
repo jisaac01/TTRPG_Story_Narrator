@@ -81,6 +81,44 @@ def _diarize(
 
 
 # ---------------------------------------------------------------------------
+# Short-name → full HuggingFace repo ID mapping for mlx-community models
+# ---------------------------------------------------------------------------
+
+#: Maps convenient short names to their ``mlx-community`` HuggingFace repo IDs.
+#: If ``model_name`` already contains a ``/`` it is treated as a full repo ID
+#: (or local path) and this table is not consulted.
+_MLX_MODEL_REPOS: dict[str, str] = {
+    "tiny":      "mlx-community/whisper-tiny-mlx",
+    "tiny.en":   "mlx-community/whisper-tiny.en-mlx",
+    "base":      "mlx-community/whisper-base-mlx",
+    "base.en":   "mlx-community/whisper-base.en-mlx",
+    "small":     "mlx-community/whisper-small-mlx",
+    "small.en":  "mlx-community/whisper-small.en-mlx",
+    "medium":    "mlx-community/whisper-medium-mlx",
+    "medium.en": "mlx-community/whisper-medium.en-mlx",
+    "large":     "mlx-community/whisper-large-mlx",
+    "large-v1":  "mlx-community/whisper-large-v1-mlx",
+    "large-v2":  "mlx-community/whisper-large-v2-mlx",
+    "large-v3":  "mlx-community/whisper-large-v3-mlx",
+    "turbo":     "mlx-community/whisper-large-v3-turbo",
+}
+
+
+def _resolve_model(model_name: str) -> str:
+    """Return the full HF repo ID (or local path) for *model_name*.
+
+    If *model_name* already contains a ``/`` it is returned unchanged,
+    allowing callers to pass a full repo ID such as
+    ``"mlx-community/whisper-large-v3-mlx"`` or a local path.
+    Otherwise the name is looked up in :data:`_MLX_MODEL_REPOS`; if not found
+    it is returned as-is so mlx-whisper can produce its own error.
+    """
+    if "/" in model_name:
+        return model_name
+    return _MLX_MODEL_REPOS.get(model_name, model_name)
+
+
+# ---------------------------------------------------------------------------
 # mlx-whisper transcription + diarization pipeline
 # ---------------------------------------------------------------------------
 
@@ -124,10 +162,15 @@ def transcribe(
             "mlx-whisper is not installed. Run: pip install mlx-whisper"
         ) from exc
 
+    # Resolve short names (e.g. "large-v3") to full mlx-community repo IDs.
+    # mlx-whisper (and the HuggingFace hub) cache downloaded weights under
+    # ~/.cache/huggingface/hub/, so subsequent runs skip the download entirely.
+    repo = _resolve_model(model_name)
+
     # --- Step 1: Transcription via mlx-whisper ---
     result = mlx_whisper.transcribe(
         str(wav_path),
-        path_or_hf_repo=model_name,
+        path_or_hf_repo=repo,
         language=language,
         verbose=False,
     )
