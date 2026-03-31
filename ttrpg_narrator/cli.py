@@ -86,35 +86,16 @@ def cli() -> None:
     ),
 )
 @click.option(
-    "--transcriber",
-    type=click.Choice(["whisperx", "ifw"], case_sensitive=False),
-    default="ifw",
-    show_default=True,
-    help="Transcription backend ('whisperx' for accuracy with alignment, 'ifw' for speed).",
-)
-@click.option(
     "--whisper-model",
     default="large-v3",
     show_default=True,
-    help="WhisperX model size (e.g. 'large-v3', 'large-v2', 'medium', 'small').",
-)
-@click.option(
-    "--device",
-    default="mps",
-    show_default=True,
-    help="PyTorch device ('cpu', 'cuda', 'mps').",
+    help="mlx-whisper model name or HuggingFace repo (e.g. 'large-v3', 'turbo', 'mlx-community/whisper-large-v3-mlx').",
 )
 @click.option(
     "--language",
     default="en",
     show_default=True,
-    help="Language code for WhisperX (e.g., 'en' to skip auto-detection).",
-)
-@click.option(
-    "--compute-type",
-    default="float16",
-    show_default=True,
-    help="Quantization type ('int8', 'float16', 'float32').",
+    help="Language code for mlx-whisper (e.g., 'en' to skip auto-detection).",
 )
 @click.option(
     "--num-speakers",
@@ -147,11 +128,8 @@ def narrate(
     backend: str,
     model: Optional[str],
     hf_token: Optional[str],
-    transcriber: str,
     whisper_model: str,
-    device: str,
     language: str,
-    compute_type: str,
     num_speakers: Optional[int],
     skip_join: bool,
     skip_transcribe: bool,
@@ -161,17 +139,11 @@ def narrate(
 
     \b
     Phases:
-      1. Join     — sort .m4a files by metadata, concatenate, convert to WAV
-      2. Transcribe — WhisperX transcription + speaker diarization → JSON
-      3. Write    — LLM cleans table talk, then writes narrative prose
-      4. Output   — saves final story to a .md file
+      1. Join        — sort .m4a files by metadata, concatenate, convert to WAV
+      2. Transcribe  — mlx-whisper transcription + pyannote speaker diarization → JSON
+      3. Write       — LLM cleans table talk, then writes narrative prose
+      4. Output      — saves final story to a .md file
     """
-    # ---- Fix libavdevice conflict ----
-    import os
-    ffmpeg_lib = "/opt/homebrew/Cellar/ffmpeg@7/7.1.3_2/lib"
-    if ffmpeg_lib not in os.environ.get("DYLD_LIBRARY_PATH", ""):
-        os.environ["DYLD_LIBRARY_PATH"] = f"{ffmpeg_lib}:{os.environ.get('DYLD_LIBRARY_PATH', '')}"
-
     # ---- resolve defaults ----
     if work_dir is None:
         work_dir = input_folder / ".narrator_work"
@@ -238,12 +210,9 @@ def narrate(
         try:
             segments = transcriber_mod.transcribe(
                 wav_path,
-                transcriber=transcriber,
                 hf_token=hf_token,
                 model_name=whisper_model,
-                device=device,
                 language=language,
-                compute_type=compute_type,
                 num_speakers=num_speakers,
             )
             transcriber_mod.save_transcript(segments, transcript_path)
@@ -332,17 +301,20 @@ def join(input_folder: Path, work_dir: Optional[Path]) -> None:
     help="Output JSON path.  Defaults to <wav_file stem>.json in the same directory.",
 )
 @click.option("--hf-token", envvar="HF_TOKEN", default=None)
-@click.option("--whisper-model", default="large-v2", show_default=True)
-@click.option("--device", default="cpu", show_default=True)
-@click.option("--compute-type", default="int8", show_default=True)
+@click.option(
+    "--whisper-model",
+    default="large-v3",
+    show_default=True,
+    help="mlx-whisper model name or HuggingFace repo (e.g. 'large-v3', 'turbo').",
+)
+@click.option("--language", default="en", show_default=True)
 @click.option("--num-speakers", type=int, default=None)
 def transcribe(
     wav_file: Path,
     output: Optional[Path],
     hf_token: Optional[str],
     whisper_model: str,
-    device: str,
-    compute_type: str,
+    language: str,
     num_speakers: Optional[int],
 ) -> None:
     """Phase 2 only: transcribe and diarize a WAV file → JSON."""
@@ -360,8 +332,7 @@ def transcribe(
             wav_file,
             hf_token=hf_token,
             model_name=whisper_model,
-            device=device,
-            compute_type=compute_type,
+            language=language,
             num_speakers=num_speakers,
         )
         transcriber_mod.save_transcript(segments, output)
