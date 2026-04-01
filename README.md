@@ -32,6 +32,80 @@ recordings through four automated phases:
 
 ---
 
+## Pre-flight Checklist
+
+Complete all of these steps **before** running the tool for the first time.
+Skipping any of them will cause the pipeline to fail mid-run, potentially after
+spending 30+ minutes on transcription.
+
+### 1. Install ffmpeg
+
+```bash
+brew install ffmpeg
+```
+
+Verify: `ffmpeg -version`
+
+### 2. Install and start Ollama (if using the default local LLM backend)
+
+1. Download and install Ollama from <https://ollama.com/download>
+2. Open the Ollama app (or run `ollama serve` in a terminal) so the server is
+   running before you invoke `ttrpg-narrator`
+3. Pull the model you intend to use:
+
+```bash
+ollama pull llama3        # default model (~4.7 GB)
+# or any other model you prefer, e.g.:
+ollama pull mistral
+```
+
+Verify: `ollama list` should show your model.
+
+> **Note:** `ollama serve` must be running for the duration of Phase 3/4.
+> If you restart your Mac or close the Ollama app you will need to start it
+> again before re-running.
+
+### 3. Set up HuggingFace access (required for speaker diarization)
+
+Speaker diarization uses three gated pyannote models. You must accept the terms
+of use for **all three** on the HuggingFace website or diarization will fail
+with an HTTP 403 error — and you will have to repeat the 30-minute Whisper
+transcription step unnecessarily.
+
+**Do all of this before your first run.**
+
+#### 3a. Create a HuggingFace account and access token
+
+1. Sign up or log in at <https://huggingface.co>
+2. Go to **Settings → Access Tokens** → create a token with at least *read*
+   permissions
+3. Copy the token — you will pass it as `--hf-token` or set it as `$HF_TOKEN`
+
+#### 3b. Accept the terms for all three gated models
+
+Open each link below while logged in to HuggingFace and click **"Agree and
+access repository"**:
+
+| Model | URL |
+|-------|-----|
+| `pyannote/speaker-diarization-3.1` | <https://huggingface.co/pyannote/speaker-diarization-3.1> |
+| `pyannote/segmentation-3.0` | <https://huggingface.co/pyannote/segmentation-3.0> |
+| `pyannote/speaker-diarization-community-1` | https://huggingface.co/pyannote/speaker-diarization-community-1 |
+| `pyannote/wespeaker-voxceleb-resnet34-LM` | <https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM> |
+
+Access approval is instant. All three are required — pyannote loads them as
+sub-dependencies and will raise a separate access error for each one you missed.
+
+#### 3c. Set your token in the environment
+
+Add to your .env file:
+
+```bash
+HF_TOKEN="hf_your_token_here"
+```
+
+---
+
 ## Installation
 
 > **Always work inside a virtual environment** — never install packages into
@@ -58,6 +132,11 @@ deactivate
 ---
 
 ## Quick Start
+
+> **Before running:** make sure Ollama is running (`ollama serve` or the Ollama
+> app is open), you have pulled a model (`ollama pull llama3`), and you have
+> accepted all three pyannote model agreements on HuggingFace (see Pre-flight
+> Checklist above).
 
 ### Full pipeline (recommended)
 
