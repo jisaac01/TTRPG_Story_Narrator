@@ -115,6 +115,17 @@ def cli() -> None:
     default=False,
     help="Skip Phase 2.  Expects 'transcript.json' to already exist in --work-dir.",
 )
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=100,
+    show_default=True,
+    help=(
+        "Segments per LLM call for catalogue extraction and outline generation.  "
+        "Keep at \u2264100 for 4K-context models (llama3); "
+        "raise to 500+ for 128K-context models (llama3.1, llama3.2, gemini)."
+    ),
+)
 
 def narrate(
     input_folder: Path,
@@ -128,6 +139,7 @@ def narrate(
     num_speakers: Optional[int],
     skip_join: bool,
     skip_transcribe: bool,
+    chunk_size: int,
 ) -> None:
     """Process TTRPG recordings in INPUT_FOLDER into a Markdown narrative.
 
@@ -229,6 +241,9 @@ def narrate(
     # Phase 3 + 4: Narrative Synthesis & Output
     # ---------------------------------------------------------------
     clean_cache_path = work_dir / "cleaned_segments.json"
+    speaker_cache_path = work_dir / "speakers.json"
+    catalogue_cache_path = work_dir / "catalogue.json"
+    outline_cache_path = work_dir / "outline.md"
     try:
         saved = writer.synthesize(
             segments,
@@ -237,9 +252,13 @@ def narrate(
             model=model,
             gemini_api_key=gemini_api_key,
             clean_cache_path=clean_cache_path,
+            speaker_cache_path=speaker_cache_path,
+            catalogue_cache_path=catalogue_cache_path,
+            outline_cache_path=outline_cache_path,
+            chunk_size=chunk_size,
             log=click.echo,
         )
-        click.echo(f"\n✓ Story saved → {saved}")
+        click.echo(f"\n\u2713 Story saved \u2192 {saved}")
     except ValueError as exc:
         click.echo(f"[!] {exc}", err=True)
         sys.exit(1)
