@@ -9,6 +9,9 @@ from ttrpg_narrator.writer import (
     extract_catalogue,
     generate_outline,
     generate_narrative,
+    normalize_transcript,
+    compress_outline,
+    continuity_check,
 )
 
 
@@ -354,39 +357,395 @@ class TestGenerateNarrative:
         assert "summary" in system or "recap" in system or "summarize" in system
         assert "richly written" not in system
 
+    def test_system_prompt_requests_structured_sections(self):
+        """The final recap prompt must explicitly request formatted catalogue sections.
 
-
-class TestCleanTableTalk:
-    """Tests for clean_table_talk robustness."""
-
-    def test_falls_back_to_original_when_llm_returns_empty_list(self):
-        """If the LLM filters out ALL segments, the original transcript is kept.
-
-        This prevents the storyteller receiving [] and writing generic filler.
+        SampleOutput.txt shows the desired format: narrative paragraphs followed
+        by OUTLINE, NPCs, ITEMS, LOCATIONS, QUESTS, and PLAYER CHARACTERS sections.
         """
-        with patch("ttrpg_narrator.writer._llm_call", return_value="[]"):
-            result = clean_table_talk(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
-        assert result == SAMPLE_SEGMENTS, (
-            "clean_table_talk should fall back to the original segments "
-            "when the LLM returns an empty list, not produce a blank transcript."
+        captured = {}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            captured["system"] = system
+            return "recap"
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            generate_narrative(SAMPLE_CATALOGUE, "Scene 1.", backend="ollama", model="llama3")
+
+        system = captured["system"].upper()
+        assert "NPC" in system or "CHARACTERS" in system, (
+            "System prompt must request an NPCs / Characters section."
+        )
+        assert "ITEM" in system, "System prompt must request an Items section."
+        assert "LOCATION" in system, "System prompt must request a Locations section."
+        assert "QUEST" in system or "OUTLINE" in system, (
+            "System prompt must request a Quests or Outline section."
         )
 
-    def test_returns_llm_filtered_segments_when_non_empty(self):
-        """Normal path: LLM keeps a subset — that filtered list is returned."""
-        filtered = [SAMPLE_SEGMENTS[0], SAMPLE_SEGMENTS[1]]
-        import json
-        with patch("ttrpg_narrator.writer._llm_call", return_value=json.dumps(filtered)):
-            result = clean_table_talk(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
-        assert result == filtered
+    def test_system_prompt_prohibits_meta_game_references(self):
+        """The storyteller prompt must explicitly forbid GM/player/dice references.
 
-    def test_falls_back_to_original_on_invalid_json(self):
-        """Existing behaviour: unparseable response → return original segments."""
-        with patch("ttrpg_narrator.writer._llm_call", return_value="not json"):
-            result = clean_table_talk(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
-        assert result == SAMPLE_SEGMENTS
+        The previous prompt produced 'The GM reminded players...' style output.
+        The prompt must contain an explicit instruction not to reference real-world
+        game elements.
+        """
+        captured = {}
 
-    def test_falls_back_to_original_on_non_list_json(self):
-        """Existing behaviour: LLM returns a dict instead of list → return original."""
-        with patch("ttrpg_narrator.writer._llm_call", return_value='{"error": "oops"}'):
-            result = clean_table_talk(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
-        assert result == SAMPLE_SEGMENTS
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            captured["system"] = system
+            return "recap"
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            generate_narrative(SAMPLE_CATALOGUE, "Scene 1.", backend="ollama", model="llama3")
+
+        system = captured["system"].lower()
+        # The prompt must explicitly prohibit meta-game language
+        assert "game master" in system or "gm" in system or "dice" in system or "in-universe" in system, (
+            "Prompt must mention meta-game elements so it can prohibit them."
+        )
+        assert "never" in system or "do not" in system or "avoid" in system, (
+            "Prompt must contain a prohibition (never/do not/avoid) against meta-game references."
+        )
+
+    def test_outline_prompt_avoids_meta_game_fallback_language(self):
+        """The outline prompt must not instruct the LLM to use 'a player' as a fallback.
+
+        'Otherwise use \"a player\"' causes the model to write 'a player charged
+        the goblin', which is out-of-universe.  The fallback should be in-universe
+        language such as 'the party' or 'the adventurers'.
+        """
+        from ttrpg_narrator.writer import _OUTLINE_SYSTEM
+        assert '"a player"' not in _OUTLINE_SYSTEM and "'a player'" not in _OUTLINE_SYSTEM, (
+            "_OUTLINE_SYSTEM must not use 'a player' as a fallback label — "
+            "use in-universe language like 'the party' or 'the adventurers'."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pass 1 — identify_speakers (new: dynamic coverage)
+# ---------------------------------------------------------------------------
+
+class TestIdentifySpeakersCoverage:
+
+    def test_covers_late_appearing_speaker(self):
+        """identify_speakers must include ALL unique speakers even if they speak late.
+
+        head_size is a *minimum* context floor. If a speaker only appears PAST
+        head_size, the function must extend the head to include their first utterance.
+
+        With head_size=3 and SPEAKER_02 at index 40, the static segments[:3] misses
+        SPEAKER_02 entirely. The new implementation must go further.
+        """
+        early_segs = [
+            {"start": float(i), "end": float(i + 1), "speaker": "SPEAKER_00", "text": "some text"}
+            for i in range(20)
+        ] + [
+            {"start": float(i + 20), "end": float(i + 21), "speaker": "SPEAKER_01", "text": "other text"}
+            for i in range(20)
+        ]
+        late_seg = {"start": 1000.0, "end": 1001.0, "speaker": "SPEAKER_02", "text": "I am a late arrival"}
+        segments = early_segs + [late_seg]  # 41 segments; SPEAKER_02 is last
+
+        captured = {}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            captured["user"] = user
+            return json.dumps({
+                "SPEAKER_00": {"role": "GM"},
+                "SPEAKER_01": {"role": "player", "character": "Asha"},
+                "SPEAKER_02": {"role": "player", "character": "Bryn"},
+            })
+
+        # head_size=3 is the minimum floor — SPEAKER_02 at index 40 must still be included
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            identify_speakers(segments, backend="ollama", model="llama3", head_size=3)
+
+        assert "I am a late arrival" in captured["user"], (
+            "identify_speakers must extend past head_size=3 to include SPEAKER_02 at index 40."
+        )
+
+    def test_covers_speaker_past_default_head_size(self):
+        """SPEAKER_02 at index 200 must be included even with the default head_size=150.
+
+        The static segments[:150] implementation drops everyone past index 149.
+        The dynamic implementation extends until all unique speakers are covered.
+        """
+        base = [
+            {"start": float(i), "end": float(i + 1), "speaker": "SPEAKER_00", "text": "first"}
+            for i in range(100)
+        ] + [
+            {"start": float(i + 100), "end": float(i + 101), "speaker": "SPEAKER_01", "text": "second"}
+            for i in range(100)
+        ]
+        # SPEAKER_02 first appears at index 200 — past the default head_size of 150
+        late_seg = {"start": 2000.0, "end": 2001.0, "speaker": "SPEAKER_02", "text": "third speaker here"}
+        segments = base + [late_seg]  # 201 segments
+
+        captured = {}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            captured["user"] = user
+            return json.dumps({
+                "SPEAKER_00": {"role": "GM"},
+                "SPEAKER_01": {"role": "player"},
+                "SPEAKER_02": {"role": "player"},
+            })
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            identify_speakers(segments, backend="ollama", model="llama3")  # default head_size=150
+
+        assert "third speaker here" in captured["user"], (
+            "identify_speakers must extend past default head_size=150 to include "
+            "SPEAKER_02 whose first utterance is at index 200."
+        )
+
+
+# ---------------------------------------------------------------------------
+# normalize_transcript
+# ---------------------------------------------------------------------------
+
+class TestNormalizeTranscript:
+
+    def test_merges_consecutive_same_speaker(self):
+        """Multiple consecutive segments from the same speaker become one entry."""
+        segments = [
+            {"start": 0.0, "end": 1.0, "speaker": "SPEAKER_01", "text": "Hello there."},
+            {"start": 1.5, "end": 2.5, "speaker": "SPEAKER_01", "text": "How are you?"},
+            {"start": 3.0, "end": 4.0, "speaker": "SPEAKER_00", "text": "Fine thanks indeed."},
+        ]
+        result = normalize_transcript(segments)
+        assert len(result) == 2
+        assert result[0]["speaker"] == "SPEAKER_01"
+        assert "Hello there" in result[0]["text"]
+        assert "How are you" in result[0]["text"]
+
+    def test_does_not_merge_different_speakers(self):
+        """A speaker change produces a new entry even for short lines."""
+        segments = [
+            {"start": 0.0, "end": 1.0, "speaker": "SPEAKER_01", "text": "Charge the gate!"},
+            {"start": 1.5, "end": 2.5, "speaker": "SPEAKER_00", "text": "The gate holds firm."},
+            {"start": 3.0, "end": 4.0, "speaker": "SPEAKER_01", "text": "Try again harder."},
+        ]
+        result = normalize_transcript(segments)
+        assert len(result) == 3
+        assert result[1]["speaker"] == "SPEAKER_00"
+
+    def test_output_has_no_timestamps(self):
+        """Normalized segments must not carry 'start' or 'end' fields."""
+        segments = [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_01", "text": "Hello world."}]
+        result = normalize_transcript(segments)
+        for entry in result:
+            assert "start" not in entry
+            assert "end" not in entry
+
+    def test_filters_empty_text_segments(self):
+        """Segments with blank or whitespace-only text are dropped silently."""
+        segments = [
+            {"start": 0.0, "end": 0.3, "speaker": "SPEAKER_01", "text": "   "},
+            {"start": 1.0, "end": 3.0, "speaker": "SPEAKER_00", "text": "I draw my sword."},
+        ]
+        result = normalize_transcript(segments)
+        assert len(result) == 1
+        assert result[0]["speaker"] == "SPEAKER_00"
+
+    def test_dramatically_reduces_segment_count(self):
+        """Merging consecutive runs collapses to one entry per speaker block."""
+        segments = (
+            [{"start": float(i), "end": float(i+1), "speaker": "SPEAKER_01",
+              "text": f"GM says thing {i}."}
+             for i in range(20)]
+            + [{"start": float(i+20), "end": float(i+21), "speaker": "SPEAKER_00",
+                "text": f"Player says {i}."}
+               for i in range(5)]
+        )
+        result = normalize_transcript(segments)
+        assert len(result) == 2  # one GM block, one player block
+
+
+# ---------------------------------------------------------------------------
+# identify_speakers — JSON robustness
+# ---------------------------------------------------------------------------
+
+class TestIdentifySpeakersJsonRobustness:
+
+    def test_extracts_json_embedded_in_commentary(self):
+        """identify_speakers must succeed when the LLM wraps the JSON in prose.
+
+        A common llama3 failure: the model writes commentary before/after the JSON.
+        _strip_fences does not handle this, so the result was always {}.
+        The new _extract_json_object helper must find and parse the embedded dict.
+        """
+        noisy_response = (
+            "Sure, here is the speaker identification:\n"
+            '{"SPEAKER_00": {"role": "player", "character": "Asha"}, '
+            '"SPEAKER_01": {"role": "GM"}}'
+            "\nLet me know if you need anything else."
+        )
+        with patch("ttrpg_narrator.writer._llm_call", return_value=noisy_response):
+            result = identify_speakers(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
+        assert result.get("SPEAKER_01", {}).get("role") == "GM", (
+            "identify_speakers must extract JSON even when wrapped in commentary."
+        )
+
+    def test_returns_empty_dict_when_no_json_anywhere(self):
+        """When there is truly no JSON in the LLM response, return {} gracefully."""
+        with patch("ttrpg_narrator.writer._llm_call",
+                   return_value="I cannot identify the speakers from this text."):
+            result = identify_speakers(SAMPLE_SEGMENTS, backend="ollama", model="llama3")
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# compress_outline
+# ---------------------------------------------------------------------------
+
+class TestCompressOutline:
+
+    def test_calls_llm_once_for_short_outline(self):
+        """A short outline compresses in a single LLM call."""
+        short_outline = "- Scene 1.\n- Scene 2.\n- Scene 3."
+        call_count = {"n": 0}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            call_count["n"] += 1
+            return "- Compressed scene."
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            result = compress_outline(short_outline, backend="ollama", model="llama3")
+
+        assert call_count["n"] == 1
+        assert isinstance(result, str) and len(result) > 0
+
+    def test_chunks_long_outline(self):
+        """60 bullet lines with chunk_size=20 results in 3 LLM calls."""
+        long_outline = "\n".join(f"- Event number {i}." for i in range(60))
+        call_count = {"n": 0}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            call_count["n"] += 1
+            return "- Compressed event."
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            compress_outline(long_outline, backend="ollama", model="llama3", chunk_size=20)
+
+        assert call_count["n"] == 3, (
+            f"Expected 3 calls for 60 lines / chunk_size=20, got {call_count['n']}"
+        )
+
+    def test_combines_all_chunk_results(self):
+        """The returned string contains output from every compressed chunk."""
+        long_outline = "\n".join(f"- Event {i}." for i in range(40))
+        responses = ["- Chunk A summary.", "- Chunk B summary."]
+        idx = {"i": 0}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            r = responses[idx["i"]]
+            idx["i"] += 1
+            return r
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            result = compress_outline(
+                long_outline, backend="ollama", model="llama3", chunk_size=20
+            )
+
+        assert "Chunk A summary" in result
+        assert "Chunk B summary" in result
+
+
+# ---------------------------------------------------------------------------
+# continuity_check
+# ---------------------------------------------------------------------------
+
+class TestContinuityCheck:
+
+    def test_sends_both_outline_and_narrative_to_llm(self):
+        """The LLM receives both the narrative draft and the source outline."""
+        captured = {}
+
+        def fake_llm(system, user, backend, model, gemini_api_key=None):
+            captured["user"] = user
+            return "Corrected narrative."
+
+        with patch("ttrpg_narrator.writer._llm_call", side_effect=fake_llm):
+            continuity_check(
+                narrative="Children were unharmed.",
+                outline="- Nobby killed two of the possessed children.",
+                backend="ollama", model="llama3",
+            )
+
+        assert "Children were unharmed" in captured["user"]
+        assert "Nobby killed two" in captured["user"]
+
+    def test_returns_corrected_narrative_string(self):
+        """continuity_check returns whatever the LLM writes as the correction."""
+        with patch("ttrpg_narrator.writer._llm_call",
+                   return_value="Updated narrative with corrections applied."):
+            result = continuity_check(
+                narrative="Draft.", outline="- Event.", backend="ollama", model="llama3"
+            )
+        assert result == "Updated narrative with corrections applied."
+
+
+# ---------------------------------------------------------------------------
+# generate_outline — preamble stripping
+# ---------------------------------------------------------------------------
+
+class TestGenerateOutlinePreambleStripping:
+
+    def test_strips_here_are_the_bullet_points_preamble(self):
+        """LLM preamble 'Here are the bullet points...' must never appear in output."""
+        preamble_response = (
+            "Here are the bullet points summarizing what happened in this chunk:\n\n"
+            "- Nobby charged the gate.\n"
+            "- Asha found a key."
+        )
+        with patch("ttrpg_narrator.writer._llm_call", return_value=preamble_response):
+            result = generate_outline(
+                SAMPLE_SEGMENTS, SAMPLE_SPEAKER_MAP, SAMPLE_CATALOGUE,
+                backend="ollama", model="llama3", chunk_size=100,
+            )
+        assert "Here are the bullet points" not in result
+        assert "Nobby charged the gate" in result
+
+    def test_strips_this_chunk_covers_preamble(self):
+        """'This chunk covers...' variants are also stripped."""
+        response = (
+            "This chunk covers the following events:\n"
+            "- The party entered the cathedral.\n"
+            "- They found the children."
+        )
+        with patch("ttrpg_narrator.writer._llm_call", return_value=response):
+            result = generate_outline(
+                SAMPLE_SEGMENTS, SAMPLE_SPEAKER_MAP, SAMPLE_CATALOGUE,
+                backend="ollama", model="llama3", chunk_size=100,
+            )
+        assert "This chunk covers" not in result
+        assert "The party entered the cathedral" in result
+
+
+# ---------------------------------------------------------------------------
+# Prompt content: dice → narrative and GM narration
+# ---------------------------------------------------------------------------
+
+class TestOutlinePromptInstructions:
+
+    def test_outline_prompt_converts_dice_to_narrative_outcomes(self):
+        """_OUTLINE_SYSTEM must instruct the LLM to convert dice results to
+        story descriptions of what happened, not raw numbers."""
+        from ttrpg_narrator.writer import _OUTLINE_SYSTEM
+        prompt_lower = _OUTLINE_SYSTEM.lower()
+        assert "dice" in prompt_lower or "roll" in prompt_lower, (
+            "_OUTLINE_SYSTEM must mention dice/rolls."
+        )
+        assert "result" in prompt_lower or "outcome" in prompt_lower or "story" in prompt_lower, (
+            "_OUTLINE_SYSTEM must say to convert to a story result/outcome."
+        )
+
+    def test_outline_prompt_treats_gm_speech_as_world_narration(self):
+        """_OUTLINE_SYSTEM must tell the LLM to treat the GM's lines as objective
+        world description so scene-setting info is not lost."""
+        from ttrpg_narrator.writer import _OUTLINE_SYSTEM
+        prompt_lower = _OUTLINE_SYSTEM.lower()
+        assert "gm" in prompt_lower or "game master" in prompt_lower or "narrator" in prompt_lower, (
+            "_OUTLINE_SYSTEM must reference the GM/narrator role."
+        )

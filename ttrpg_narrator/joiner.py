@@ -91,7 +91,8 @@ def concatenate_audio(files: List[Path], output_path: Path) -> Path:
     """Concatenate *files* into *output_path* (.m4a) using ffmpeg concat demuxer."""
     if len(files) == 1:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(files[0]), "-c", "copy", str(output_path)],
+            ["ffmpeg", "-y", "-i", str(files[0]), "-c", "copy",
+             "-movflags", "+faststart", str(output_path)],
             check=True,
             capture_output=True,
         )
@@ -116,6 +117,7 @@ def concatenate_audio(files: List[Path], output_path: Path) -> Path:
                 "-f", "concat", "-safe", "0",
                 "-i", str(list_path),
                 "-c", "copy",
+                "-movflags", "+faststart",
                 str(output_path),
             ],
             check=True,

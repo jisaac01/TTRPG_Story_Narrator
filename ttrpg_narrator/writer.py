@@ -23,6 +23,7 @@ Supports two backends selected via the ``backend`` parameter:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -100,13 +101,53 @@ Known session catalogue (for context — do not repeat it verbatim):
 {catalogue_context}
 
 The transcript chunk is provided as plain text lines: "SPEAKER_XX: <what they said>".
-Write 3–8 bullet points describing what happened in this chunk:
-- Stick to facts in the transcript; do not invent anything.
-- Use character names from the catalogue where known; otherwise use "a player".
-- Include significant dialogue, decisions, encounters, and locations.
-- Each bullet should be one concise sentence.
+The speaker marked as GM (or the one describing the world/NPCs) is the narrator.
+Treat their lines as objective scene description — what the characters see, hear, and
+experience — not as things the GM "said".
 
-Return ONLY the bullet points — no intro, no heading, no commentary.
+Write 3–8 bullet points describing what happened in this chunk.
+Rules:
+- Use GM narration as factual scene description.
+- Use character names from the catalogue where known; otherwise use "the party" or
+  "the adventurers".
+- Dice rolls and mechanical outcomes must be converted to story results.
+  Example: instead of "rolled a 14 vs AC 8", write "landed a solid hit" or
+  "barely dodged the blow". Convey the narrative outcome, not the number.
+- Include key decisions, dialogue, discoveries, and consequences.
+- Each bullet is one concise sentence.
+- Begin your response IMMEDIATELY with the first bullet (- or •).
+  Do NOT write any intro sentence, heading, or preamble whatsoever.
+"""
+
+_COMPRESS_SYSTEM = """\
+You are condensing a TTRPG session scene outline into a shorter summary.
+
+You will receive a set of bullet points from one portion of the session.
+Condense them into 3–5 bullets that preserve:
+- Character names and what they did
+- Key outcomes (victories, losses, discoveries)
+- Story-significant moments
+
+Remove redundant bullets, dice roll numbers, and meta-game references.
+Your response MUST start immediately with the first bullet (- or •). No preamble.
+"""
+
+_CONTINUITY_SYSTEM = """\
+You are a continuity editor reviewing a TTRPG session recap against its source outline.
+
+You will receive:
+  OUTLINE: bullet points of what actually happened in the session.
+  DRAFT: the recap written from that outline.
+
+Check the draft against the outline for:
+- Events described incorrectly (e.g. draft says "unharmed" when outline says "killed")
+- Key events that are missing from the draft
+- Wrong character names or outcomes
+
+Correct any errors and return the full rewritten recap.
+Keep the same format and structure as the draft.
+Do not add invented details — only fix factual contradictions with the outline.
+Return ONLY the corrected recap, no commentary.
 """
 
 _STORYTELLER_SYSTEM = """\
@@ -115,12 +156,34 @@ You are writing a session recap for a tabletop RPG group to read after their gam
 You will receive a scene-by-scene OUTLINE and a structured CATALOGUE of
 characters, locations, items, and other key details from the session.
 
-Write a clear, factual summary of the session:
-- Work through the session chronologically, following the outline.
-- Use character and place names from the catalogue.
-- Use plain, direct prose — no dramatic flair, no invented detail.
-- Aim for 3–6 short paragraphs that a player could read in 2 minutes.
-- Do NOT add events or details not present in the outline or catalogue.
+Never mention the Game Master, players, dice rolls, game mechanics, or anything
+outside the story world. Write entirely from within the fiction.
+
+Write the recap in this exact format:
+
+1. A session title on the first line (e.g. "Session 6 — The Sunken Vault").
+2. Two to four narrative paragraphs summarising events chronologically.
+3. Then the following labelled sections, each heading on its own line in ALL CAPS:
+
+OUTLINE:
+- One bullet per scene, summarising what happened.
+
+NPCs:
+- Name: brief in-world description.
+
+ITEMS:
+- Name: brief description.
+
+LOCATIONS:
+- Name: brief description.
+
+QUESTS:
+- Quest name: what the characters are trying to accomplish.
+
+PLAYER CHARACTERS
+- Name: role, notable abilities or traits shown in this session.
+
+Use only information present in the outline and catalogue. Do not invent details.
 """
 
 
@@ -194,6 +257,55 @@ def _strip_fences(text: str) -> str:
             lines = lines[:-1]
         text = "\n".join(lines)
     return text
+
+
+def _extract_json_object(text: str) -> dict:
+    """Extract and parse the first JSON object ``{...}`` from an LLM response.
+
+    Handles the common llama3 pattern where the model wraps the JSON dict in
+    prose commentary both before and after.  Falls back to ``{}`` on failure.
+    """
+    text = _strip_fences(text).strip()
+    # Fast path: the whole text is valid JSON
+    try:
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Slow path: find the outermost {...} block
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        try:
+            result = json.loads(match.group(0))
+            if isinstance(result, dict):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+# Regex that matches common LLM preamble lines the models add before bullet lists.
+_OUTLINE_PREAMBLE_RE = re.compile(
+    r"^(here (are|is|'?s)|this (chunk|scene|section|part)( covers)?|these are"
+    r"|the following|below (are|is))",
+    re.IGNORECASE,
+)
+
+
+def _strip_outline_preamble(text: str) -> str:
+    """Remove leading preamble lines from LLM outline chunk output.
+
+    Strips lines matching common introductory patterns such as
+    "Here are the bullet points summarizing what happened in this chunk:".
+    """
+    lines = text.strip().splitlines()
+    while lines and _OUTLINE_PREAMBLE_RE.match(lines[0].strip()):
+        lines.pop(0)
+    # Drop any blank lines after the stripped preamble
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    return "\n".join(lines)
 
 
 def _format_speaker_context(speaker_map: dict) -> str:
@@ -278,17 +390,22 @@ def identify_speakers(
     is usually enough to distinguish the GM's descriptive voice from the
     players'.  Returns an empty dict on parse failure.
     """
-    head = segments[:head_size]
+    # Build the minimum head that covers every unique speaker in the transcript,
+    # but always include at least head_size segments for context.
+    all_speakers = {s["speaker"] for s in segments}
+    seen: set = set()
+    head: List[Segment] = []
+    for seg in segments:
+        head.append(seg)
+        seen.add(seg["speaker"])
+        if seen >= all_speakers and len(head) >= head_size:
+            break
+    # If coverage was reached before head_size, pad to head_size for context.
+    if len(head) < head_size:
+        head = segments[:head_size]
     plain_text = "\n".join(f"{s['speaker']}: {s['text']}" for s in head)
     raw = _llm_call(_SPEAKER_ID_SYSTEM, plain_text, backend, model, gemini_api_key)
-    text = _strip_fences(raw)
-    try:
-        result = json.loads(text)
-        if not isinstance(result, dict):
-            return {}
-        return result
-    except (json.JSONDecodeError, ValueError):
-        return {}
+    return _extract_json_object(raw)
 
 
 def extract_catalogue(
@@ -359,8 +476,8 @@ def generate_outline(
     scene_summaries: List[str] = []
     for chunk in chunks:
         plain_text = "\n".join(f"{s['speaker']}: {s['text']}" for s in chunk)
-        summary = _llm_call(system, plain_text, backend, model, gemini_api_key)
-        scene_summaries.append(summary.strip())
+        raw = _llm_call(system, plain_text, backend, model, gemini_api_key)
+        scene_summaries.append(_strip_outline_preamble(raw))
 
     return "\n\n".join(scene_summaries)
 
@@ -383,6 +500,90 @@ def generate_narrative(
         f"## Catalogue\n{json.dumps(catalogue, indent=2, ensure_ascii=False)}"
     )
     return _llm_call(_STORYTELLER_SYSTEM, user_content, backend, model, gemini_api_key)
+
+
+def normalize_transcript(segments: List[dict]) -> List[dict]:
+    """Pre-process: merge consecutive same-speaker segments into screenplay lines.
+
+    Removes timestamps and merges runs of the same speaker so the transcript
+    resembles a screenplay rather than a list of short JSON objects.  This
+    dramatically reduces token count (a 3,000-segment session typically
+    compresses to ~500 merged lines) and gives the LLM more context per call.
+
+    Empty or whitespace-only segments are silently dropped.
+    Timestamps are stripped from the output (``start``/``end`` keys removed).
+    """
+    if not segments:
+        return []
+
+    merged: List[dict] = []
+    current_speaker: str = segments[0]["speaker"]
+    buffer: List[str] = []
+
+    for seg in segments:
+        text = seg["text"].strip()
+        if not text:
+            continue
+        if seg["speaker"] == current_speaker:
+            buffer.append(text)
+        else:
+            if buffer:
+                merged.append({"speaker": current_speaker, "text": " ".join(buffer)})
+            current_speaker = seg["speaker"]
+            buffer = [text]
+
+    if buffer:
+        merged.append({"speaker": current_speaker, "text": " ".join(buffer)})
+
+    return merged
+
+
+def compress_outline(
+    outline: str,
+    backend: str,
+    model: str,
+    gemini_api_key: Optional[str] = None,
+    chunk_size: int = 20,
+) -> str:
+    """Pass 3.5: Compress the full session outline to fit the narrative context window.
+
+    The outline produced by ``generate_outline`` can be 5,000+ tokens — larger
+    than llama3's context.  This pass chunks the outline into groups of
+    *chunk_size* lines, compresses each group to 3–5 key events, and joins
+    the results.  The compressed outline is typically under 500 tokens.
+    """
+    lines = [ln for ln in outline.splitlines() if ln.strip()]
+    if not lines:
+        return outline
+
+    chunks = [lines[i:i + chunk_size] for i in range(0, len(lines), chunk_size)]
+    compressed_parts: List[str] = []
+    for chunk in chunks:
+        chunk_text = "\n".join(chunk)
+        result = _llm_call(_COMPRESS_SYSTEM, chunk_text, backend, model, gemini_api_key)
+        compressed_parts.append(_strip_outline_preamble(result).strip())
+
+    return "\n".join(compressed_parts)
+
+
+def continuity_check(
+    narrative: str,
+    outline: str,
+    backend: str,
+    model: str,
+    gemini_api_key: Optional[str] = None,
+) -> str:
+    """Pass 4.5: Review the narrative against the outline and fix contradictions.
+
+    Sends the compressed outline and the generated narrative to the LLM and
+    asks it to identify any factual errors (e.g. "children were unharmed" when
+    the outline says they were killed) and rewrite the narrative with corrections.
+    """
+    user_content = (
+        f"OUTLINE:\n{outline}\n\n"
+        f"DRAFT:\n{narrative}"
+    )
+    return _llm_call(_CONTINUITY_SYSTEM, user_content, backend, model, gemini_api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +614,7 @@ def synthesize(
     speaker_cache_path: Optional[Path] = None,
     catalogue_cache_path: Optional[Path] = None,
     outline_cache_path: Optional[Path] = None,
+    compressed_outline_cache_path: Optional[Path] = None,
     chunk_size: int = 100,
     log=None,
 ) -> Path:
@@ -438,6 +640,8 @@ def synthesize(
         Optional path to cache the extracted catalogue JSON.
     outline_cache_path:
         Optional path to cache the generated scene outline.
+    compressed_outline_cache_path:
+        Optional path to cache the compressed (context-window-safe) outline.
     chunk_size:
         Number of transcript segments per LLM call for chunked passes
         (catalogue extraction and outline generation).  Keep at ≤100 for
@@ -453,7 +657,12 @@ def synthesize(
     if log is None:
         log = print
 
-    # --- Pass 0: Clean table talk ---
+    # --- Pre-processing: normalize transcript ---
+    log(f"      [Pre] Normalizing transcript ({len(segments)} raw segments)…")
+    normalized = normalize_transcript(segments)
+    log(f"      [Pre] Normalized → {len(normalized)} merged lines.")
+
+    # --- Pass 0: Clean table talk (operates on normalized segments) ---
     if clean_cache_path is not None and clean_cache_path.exists():
         log(f"      [Pass 0] Loading cached cleaned transcript from {clean_cache_path}…")
         with open(clean_cache_path, encoding="utf-8") as _fh:
@@ -461,7 +670,7 @@ def synthesize(
         log(f"      [Pass 0] {len(cleaned)} segments loaded (skipping LLM clean).")
     else:
         log(f"      [Pass 0] Cleaning table talk with {backend}/{model}…")
-        cleaned = clean_table_talk(segments, backend, model, gemini_api_key)
+        cleaned = clean_table_talk(normalized, backend, model, gemini_api_key)
         log(f"      [Pass 0] Done — {len(cleaned)} segments remain.")
         if clean_cache_path is not None:
             clean_cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,11 +679,23 @@ def synthesize(
             log(f"      [Pass 0] Cached → {clean_cache_path}")
 
     # --- Pass 1: Identify speakers ---
-    if speaker_cache_path is not None and speaker_cache_path.exists():
-        log(f"      [Pass 1] Loading cached speaker map from {speaker_cache_path}…")
-        with open(speaker_cache_path, encoding="utf-8") as _fh:
+    # Treat an empty cached map as a cache miss — empty means the previous run
+    # failed to parse the LLM response and must be retried.
+    _speaker_cache_valid = (
+        speaker_cache_path is not None
+        and speaker_cache_path.exists()
+    )
+    if _speaker_cache_valid:
+        with open(speaker_cache_path, encoding="utf-8") as _fh:  # type: ignore[arg-type]
             speaker_map = json.load(_fh)
-        log(f"      [Pass 1] {len(speaker_map)} speakers loaded.")
+        if speaker_map:
+            log(f"      [Pass 1] Loaded {len(speaker_map)} speakers from cache.")
+        else:
+            log("      [Pass 1] Cached speaker map is empty — re-running identification…")
+            speaker_map = identify_speakers(cleaned, backend, model, gemini_api_key)
+            log(f"      [Pass 1] Identified {len(speaker_map)} speakers.")
+            with open(speaker_cache_path, "w", encoding="utf-8") as _fh:  # type: ignore[arg-type]
+                json.dump(speaker_map, _fh, indent=2, ensure_ascii=False)
     else:
         log(f"      [Pass 1] Identifying speakers with {backend}/{model}…")
         speaker_map = identify_speakers(cleaned, backend, model, gemini_api_key)
@@ -520,9 +741,31 @@ def synthesize(
                 _fh.write(outline)
             log(f"      [Pass 3] Cached → {outline_cache_path}")
 
+    # --- Pass 3.5: Compress outline to fit narrative context window ---
+    if compressed_outline_cache_path is not None and compressed_outline_cache_path.exists():
+        log(f"      [Pass 3.5] Loading cached compressed outline…")
+        with open(compressed_outline_cache_path, encoding="utf-8") as _fh:
+            compressed = _fh.read()
+        log("      [Pass 3.5] Compressed outline loaded.")
+    else:
+        log(f"      [Pass 3.5] Compressing outline with {backend}/{model}…")
+        compressed = compress_outline(outline, backend, model, gemini_api_key)
+        log(f"      [Pass 3.5] Compressed: {len(outline)} → {len(compressed)} chars.")
+        if compressed_outline_cache_path is not None:
+            compressed_outline_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(compressed_outline_cache_path, "w", encoding="utf-8") as _fh:
+                _fh.write(compressed)
+            log(f"      [Pass 3.5] Cached → {compressed_outline_cache_path}")
+
     # --- Pass 4: Generate narrative ---
     log(f"      [Pass 4] Writing final recap with {backend}/{model}…")
-    narrative = generate_narrative(catalogue, outline, backend, model, gemini_api_key)
+    narrative = generate_narrative(catalogue, compressed, backend, model, gemini_api_key)
     log("      [Pass 4] Recap generated.")
 
+    # --- Pass 4.5: Continuity check ---
+    log(f"      [Pass 4.5] Running continuity check with {backend}/{model}…")
+    narrative = continuity_check(narrative, compressed, backend, model, gemini_api_key)
+    log("      [Pass 4.5] Continuity check complete.")
+
     return save_narrative(narrative, output_path)
+

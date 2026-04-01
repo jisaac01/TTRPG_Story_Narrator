@@ -1,0 +1,62 @@
+Belowdown Episode 6
+
+The Belowdowners decided to finally confront the three Zortash automatons. Their attempt at subterfuge with the first, the Paranoid Zortash, failed spectacularly when they couldn’t produce the head of his rivals. A fight broke out, and the automaton filled the room with a confusing mist, causing Aratha and Juni to attack each other while Wolf randomly lashed out at his allies. Despite the chaos and a stunning spell that briefly took Adder out of the fight, the party eventually overcame the disorienting magic and dismantled their paranoid foe, with Wolf pulling its mechanical brain out on the tip of his sword.
+
+Their next target was the Vain Zortash. Forgoing any attempt at conversation, the party strode into his chamber and smashed the massive mirror he was admiring. Enraged, the automaton attacked, but it was no match for the focused adventurers. A powerful blast from Adder and two mighty critical blows from Wolf’s silver longsword swiftly brought the second automaton down, allowing Wolf to collect another mechanical brain.
+
+
+With two brains in hand, they confronted the final, Scholarly Zortash. Instead of threatening him, they informed him of his rivals’ demise. The automaton was pleased, offering them knowledge from his vast library. He revealed that the original, biological Zortash had descended deeper into the dungeon long ago. Deciding he was a useful, if quirky, ally, the party spared him.
+
+Pressing onward to level 10, they discovered a floor filled with narrow maintenance tunnels and deep shafts. They found two mysterious doors sealed with reptilian puzzles. After a long trip back up, the Scholarly Zortash easily translated their rubbings. To open the doors, which required the hand of a living creature, they hired two lazy guards from a higher level. One guard died instantly opening the first door, while the other survived opening the second. Behind one door, they found an armory containing four terrifying beach ball-sized automatons with knife-fingers. Their surprise attack barely scratched one, and the machines retaliated with a devastating flurry of attacks, downing Aratha and Wolf in moments. Adder and Juni barely managed to drag their unconscious companions to safety, narrowly escaping a total party kill.
+
+OUTLINE:
+Confronting the Paranoid Zortash
+The party attempted to deceive the Paranoid Zortash but failed when they couldn’t produce a rival’s head.
+Combat began, and the Zortash cast a confusion mist, causing Aratha and Juni to attack each other.
+Adder was stunned by a command spell for three rounds.
+After the mist faded, the party rallied and destroyed the automaton, with Wolf collecting its mechanical brain.
+Dealing with the Vain Zortash
+The party decided to attack the Vain Zortash directly by smashing its prized mirror.
+The enraged automaton attacked but was defeated very quickly by Adder’s blast and two critical hits from Wolf.
+Wolf collected the second mechanical brain.
+An Alliance with the Scholar
+The party presented the two brains to the Scholarly Zortash, who was pleased his rivals were eliminated.
+He revealed the original, biological Zortash had descended deeper into the dungeon.
+The party spared him, securing a knowledgeable ally.
+Puzzles on Level 10
+The party explored Level 10, discovering shafts and doors locked with reptilian puzzles.
+They returned to the Scholarly Zortash, who solved the equations from their charcoal rubbings.
+The doors required a living hand to open, so the party hired two guards for the task.
+One guard died and the other was knocked unconscious, but both doors were opened.
+The Automaton Armory Ambush
+Behind one door, the party found four inert, beach ball-sized automatons with knife-fingers.
+They launched a surprise attack, which provoked the automatons.
+The machines retaliated with a devastating barrage of attacks, instantly downing Wolf and Aratha.
+Juni and Adder were forced to drag their unconscious companions away and flee the room.
+NPCs:
+Armory Automatons: Four beach ball-sized bronze spheres with puppet-like upper torsos and knives for fingers. Found inert in an armory, they proved to be incredibly deadly combatants, nearly wiping out the party.
+Lazy Guards: A pair of guards found shirking their duties. They were hired for 5 gold each to open the hand-print doors on level 10. One died, the other passed out but survived.
+Paranoid Zortash: A nine-foot-tall brass automaton obsessed with conspiracies, believing itself to be the one true Zortash. It attacked the party with a confusion mist and was destroyed.
+Scholarly Zortash: A nine-foot-tall brass automaton dedicated to reading and documenting knowledge. He was pleased the other Zortashes were destroyed and agreed to help the party by translating reptilian text.
+Vain Zortash: A nine-foot-tall brass automaton completely fixated on its own reflection in a giant mirror. It became enraged and attacked when its mirror was shattered.
+ITEMS:
+Floating Diamond: A sparkling diamond that floats in mid-air, part of a magical trap that summons creatures and alerts enemies if disturbed.
+Growth Tincture: An alchemical potion created by Juni that caused Wolf to double in size for one hour, increasing his strength.
+Valuable Stylus: A steel-nibbed stylus found on the Paranoid Zortash’s desk, worth about 5 gold pieces.
+Wand of Sending: A magic wand that allows the user to send short mental messages. It was used in a failed attempt to trick the Paranoid Zortash.
+Zortash Mechanical Brain: The complex mechanical mind of a Zortash automaton. The party collected several, both active and defunct, hoping to sell them.
+LOCATIONS:
+Level 10: A maintenance-like floor characterized by narrow two-foot-wide tunnels and deep, rune-engraved shafts leading further down.
+The Automaton Armory: A storage room behind one of the puzzle doors on Level 10, housing four deadly bronze automatons.
+The Diamond Trap Rooms: Two identical rooms on Level 10, each containing a floating diamond surrounded by a magical mist and a door that required the hand of a living creature to open.
+Zortash Chambers: The rooms on the upper floors of the dungeon that served as the lairs for the Paranoid, Vain, and Scholarly Zortash automatons.
+QUESTS:
+Eliminate the Zortash Clones: A self-appointed quest to deal with the three Zortash automatons. The party defeated the Paranoid and Vain Zortashes and formed an alliance with the Scholarly one.
+Find the Real Zortash: After learning from the Scholarly Zortash that the original, biological Zortash descended deeper into the dungeon, the party now has a new long-term objective.
+Open the Reptilian Doors: Find a way to bypass the two doors on Level 10 that were sealed with reptilian puzzles and required a living hand to open.
+PLAYER CHARACTERS
+
+Adder: A Lawful Evil character who attacks from a distance with powerful kinetic blasts. He is pragmatic and ruthless, showing no hesitation in dispatching enemies and strategically using his allies as cover.
+Aratha: The party’s primary magic-user and healer. She wields silver javelins and casts spells like Detect Magic and Silence to control the battlefield and uncover secrets. Her magic was crucial in identifying the nature of the traps on Level 10.
+Juni: A skilled alchemist who supports the party with a variety of concoctions, including corrosive slimes, healing salves, and enhancement tinctures. She showed a fondness for the Scholarly Zortash and his pursuit of knowledge.
+Wolf: A conflicted Orc warrior who wields a silver longsword. Despite his misgivings about needless violence, he is a formidable frontline combatant, capable of dealing immense damage. He collected the brains of the Zortashes he helped defeat.

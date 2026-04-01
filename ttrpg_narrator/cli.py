@@ -244,6 +244,7 @@ def narrate(
     speaker_cache_path = work_dir / "speakers.json"
     catalogue_cache_path = work_dir / "catalogue.json"
     outline_cache_path = work_dir / "outline.md"
+    compressed_outline_cache_path = work_dir / "compressed_outline.md"
     try:
         saved = writer.synthesize(
             segments,
@@ -255,6 +256,7 @@ def narrate(
             speaker_cache_path=speaker_cache_path,
             catalogue_cache_path=catalogue_cache_path,
             outline_cache_path=outline_cache_path,
+            compressed_outline_cache_path=compressed_outline_cache_path,
             chunk_size=chunk_size,
             log=click.echo,
         )
