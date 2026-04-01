@@ -32,28 +32,40 @@ from ttrpg_narrator.transcriber import Segment
 
 _CLEANER_SYSTEM = """\
 You are an editor processing a transcript from a tabletop RPG (TTRPG) session.
-Your task is to remove every "out-of-character" or "table talk" exchange — \
-things like passing snacks, rules questions ("What's the AC?"), \
-side conversations, or anything unrelated to the story being played.
+Your task is to remove clearly "out-of-character" or "table talk" exchanges — \
+things like passing snacks, pizza orders, bathroom breaks, rules arguments \
+("What's the AC?"), phone interruptions, or pure meta-game chatter that has \
+NOTHING to do with the story being played.
 
 The user will supply the transcript as a JSON array.  Each element has the keys:
   "start", "end", "speaker", "text"
 
-Return ONLY the segments that contain in-character actions, dialogue, or \
-story-relevant content.  Output valid JSON using the exact same schema — \
+Be CONSERVATIVE: when in doubt, keep the segment.  It is far better to \
+include a borderline segment than to remove story-relevant content. \
+Only remove segments that are unambiguously out-of-character.  \
+The output must contain at least as many segments as were clearly in-character; \
+never return an empty array.
+
+Return ONLY the retained segments using the exact same JSON schema — \
 no extra keys, no commentary, no markdown fences.
 """
 
 _STORYTELLER_SYSTEM = """\
-You are a skilled fantasy author.  The user will supply a filtered transcript \
-from a tabletop RPG session, presented as a JSON array with speaker labels \
-(e.g. SPEAKER_00, SPEAKER_01).
+You are a note-taker summarizing a tabletop RPG (TTRPG) session for the \
+players to review afterward.
 
-Your task: convert this transcript into richly written, third-person \
-narrative prose.  Use the context to infer character names where possible; \
-otherwise refer to them as "the first adventurer", "the second adventurer", \
-etc.  Merge sequential actions and dialogue into flowing paragraphs.  \
-Do NOT simply list events — write it as an engaging story.
+The user will supply a transcript of the session as plain text lines in the \
+format "SPEAKER_XX: <what they said>".  One speaker is the Game Master (GM) \
+describing the world; the others are players speaking in- or out-of-character.
+
+Your task: write a clear, factual recap of what happened during the session.
+- Summarize the key story events in chronological order.
+- Note important NPCs encountered, locations visited, and decisions the party made.
+- Use plain, direct prose.  Do NOT editorialize or add dramatic flair.
+- Do NOT invent events or details that are not in the transcript.
+- If a character name is mentioned, use it; otherwise use "a player" or "the party".
+- Aim for a structured summary (short paragraphs or bullet points) that a \
+player could skim to remember what happened.
 """
 
 
@@ -154,6 +166,10 @@ def clean_table_talk(
         cleaned: List[Segment] = json.loads(text)
         if not isinstance(cleaned, list):
             raise ValueError("Expected a JSON array.")
+        # If the LLM removed every segment, fall back to the original transcript
+        # so the storyteller has real content to work with.
+        if not cleaned:
+            return segments
         return cleaned
     except (json.JSONDecodeError, ValueError):
         # Gracefully degrade: return original segments
@@ -166,9 +182,18 @@ def generate_narrative(
     model: str,
     gemini_api_key: Optional[str] = None,
 ) -> str:
-    """Step B: Turn cleaned segments into third-person narrative prose."""
-    transcript_json = json.dumps(segments, indent=2, ensure_ascii=False)
-    return _llm_call(_STORYTELLER_SYSTEM, transcript_json, backend, model, gemini_api_key)
+    """Step B: Turn cleaned segments into a factual session recap.
+
+    Segments are serialised as compact plain text (``SPEAKER_XX: text``)
+    rather than indented JSON.  For a 2-hour session (~1000 segments) this
+    cuts token usage by roughly 3-4x, keeping the full transcript within
+    typical LLM context windows instead of silently truncating after the
+    first few minutes.
+    """
+    plain_text = "\n".join(
+        f"{seg['speaker']}: {seg['text']}" for seg in segments
+    )
+    return _llm_call(_STORYTELLER_SYSTEM, plain_text, backend, model, gemini_api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +220,8 @@ def synthesize(
     backend: str = "ollama",
     model: str = "llama3",
     gemini_api_key: Optional[str] = None,
+    clean_cache_path: Optional[Path] = None,
+    log=None,
 ) -> Path:
     """Run the full Phase 3+4 pipeline and save a Markdown narrative.
 
@@ -210,12 +237,39 @@ def synthesize(
         Model name passed to the chosen backend.
     gemini_api_key:
         Required when *backend* is ``"gemini"``.
+    clean_cache_path:
+        Optional path to save/load the cleaned segments JSON checkpoint.
+        If the file exists the LLM cleaning step is skipped.
+    log:
+        Callable used for progress messages (default: print).
 
     Returns
     -------
     Path
         The path to the saved Markdown file.
     """
-    cleaned = clean_table_talk(segments, backend, model, gemini_api_key)
+    if log is None:
+        log = print
+
+    # --- Step A: Clean table talk ---
+    if clean_cache_path is not None and clean_cache_path.exists():
+        log(f"      [3/4] Loading cached cleaned transcript from {clean_cache_path}…")
+        with open(clean_cache_path, encoding="utf-8") as _fh:
+            cleaned = json.load(_fh)
+        log(f"      [3/4] Loaded {len(cleaned)} cleaned segments (skipping LLM clean).")
+    else:
+        log(f"      [3/4] Cleaning table talk with {backend}/{model}…")
+        cleaned = clean_table_talk(segments, backend, model, gemini_api_key)
+        log(f"      [3/4] Cleaning done — {len(cleaned)} segments remain.")
+        if clean_cache_path is not None:
+            clean_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(clean_cache_path, "w", encoding="utf-8") as _fh:
+                json.dump(cleaned, _fh, indent=2, ensure_ascii=False)
+            log(f"      [3/4] Cleaned segments cached → {clean_cache_path}")
+
+    # --- Step B: Generate narrative ---
+    log(f"      [4/4] Generating narrative prose with {backend}/{model}…")
     narrative = generate_narrative(cleaned, backend, model, gemini_api_key)
+    log("      [4/4] Narrative generated.")
+
     return save_narrative(narrative, output_path)

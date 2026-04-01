@@ -31,3 +31,7 @@ ttrpg-narrator = "ttrpg_narrator.cli:cli"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ttrpg_narrator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

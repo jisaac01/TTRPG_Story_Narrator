@@ -115,12 +115,7 @@ def cli() -> None:
     default=False,
     help="Skip Phase 2.  Expects 'transcript.json' to already exist in --work-dir.",
 )
-@click.option(
-    "--keep-work",
-    is_flag=True,
-    default=False,
-    help="Keep intermediate files in --work-dir after completion.",
-)
+
 def narrate(
     input_folder: Path,
     output: Optional[Path],
@@ -133,7 +128,6 @@ def narrate(
     num_speakers: Optional[int],
     skip_join: bool,
     skip_transcribe: bool,
-    keep_work: bool,
 ) -> None:
     """Process TTRPG recordings in INPUT_FOLDER into a Markdown narrative.
 
@@ -173,20 +167,23 @@ def narrate(
         click.echo(f"[1/4] Skipping join — using existing '{wav_path}'.")
     else:
         click.echo("[1/4] Pre-processing audio files…")
-        try:
-            m4a_files = sorted(input_folder.glob("*.m4a"))
-            click.echo(f"      Found {len(m4a_files)} .m4a file(s).")
-            sorted_files = joiner.sort_files_chronologically(m4a_files)
-            click.echo("      Joining and converting to WAV…")
-            joiner.concatenate_audio(sorted_files, work_dir / "full_session.m4a")
-            joiner.convert_to_wav(work_dir / "full_session.m4a", wav_path)
-            click.echo(f"      WAV saved → {wav_path}")
-        except FileNotFoundError as exc:
-            click.echo(f"[!] {exc}", err=True)
-            sys.exit(1)
-        except Exception as exc:
-            click.echo(f"[!] Phase 1 failed: {exc}", err=True)
-            sys.exit(1)
+        if wav_path.exists():
+            click.echo(f"      WAV already exists — skipping conversion → {wav_path}")
+        else:
+            try:
+                m4a_files = sorted(input_folder.glob("*.m4a"))
+                click.echo(f"      Found {len(m4a_files)} .m4a file(s).")
+                sorted_files = joiner.sort_files_chronologically(m4a_files)
+                click.echo("      Joining and converting to WAV…")
+                joiner.concatenate_audio(sorted_files, work_dir / "full_session.m4a")
+                joiner.convert_to_wav(work_dir / "full_session.m4a", wav_path)
+                click.echo(f"      WAV saved → {wav_path}")
+            except FileNotFoundError as exc:
+                click.echo(f"[!] {exc}", err=True)
+                sys.exit(1)
+            except Exception as exc:
+                click.echo(f"[!] Phase 1 failed: {exc}", err=True)
+                sys.exit(1)
 
     # ---------------------------------------------------------------
     # Phase 2: Transcription & Diarization
@@ -207,6 +204,8 @@ def narrate(
                 "      [!] No HuggingFace token provided (--hf-token / HF_TOKEN). "
                 "Speaker diarization will be skipped."
             )
+        whisper_cache_path = work_dir / "whisper_segments.json"
+        diarize_cache_path = work_dir / "diarize_segments.json"
         try:
             segments = transcriber_mod.transcribe(
                 wav_path,
@@ -214,6 +213,9 @@ def narrate(
                 model_name=whisper_model,
                 language=language,
                 num_speakers=num_speakers,
+                log=click.echo,
+                whisper_cache_path=whisper_cache_path,
+                diarize_cache_path=diarize_cache_path,
             )
             transcriber_mod.save_transcript(segments, transcript_path)
             click.echo(
@@ -226,8 +228,7 @@ def narrate(
     # ---------------------------------------------------------------
     # Phase 3 + 4: Narrative Synthesis & Output
     # ---------------------------------------------------------------
-    click.echo(f"[3/4] Cleaning table talk with {backend}/{model}…")
-    click.echo(f"[4/4] Generating narrative prose…")
+    clean_cache_path = work_dir / "cleaned_segments.json"
     try:
         saved = writer.synthesize(
             segments,
@@ -235,6 +236,8 @@ def narrate(
             backend=backend,
             model=model,
             gemini_api_key=gemini_api_key,
+            clean_cache_path=clean_cache_path,
+            log=click.echo,
         )
         click.echo(f"\n✓ Story saved → {saved}")
     except ValueError as exc:
@@ -244,19 +247,7 @@ def narrate(
         click.echo(f"[!] Phase 3/4 failed: {exc}", err=True)
         sys.exit(1)
 
-    # ---------------------------------------------------------------
-    # Optional clean-up
-    # ---------------------------------------------------------------
-    if not keep_work:
-        import shutil
-        if work_dir.is_symlink():
-            click.echo(
-                f"[!] Skipping cleanup: '{work_dir}' is a symlink. "
-                "Remove it manually if desired.",
-                err=True,
-            )
-        else:
-            shutil.rmtree(work_dir)
+
 
 
 # ---------------------------------------------------------------------------

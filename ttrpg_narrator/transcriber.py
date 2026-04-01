@@ -43,11 +43,25 @@ def _diarize(
     wav_path: Path,
     hf_token: str,
     num_speakers: Optional[int] = None,
+    log=None,
+    diarize_cache_path: Optional[Path] = None,
 ) -> list:
     """Run pyannote speaker diarization on *wav_path*.
 
     Returns a list of ``{"start": float, "end": float, "speaker": str}`` dicts.
     """
+    if log is None:
+        log = print
+
+    # --- Load from cache if available ---
+    if diarize_cache_path is not None and diarize_cache_path.exists():
+        log(f"      Loading cached diarization from {diarize_cache_path}…")
+        with open(diarize_cache_path, encoding="utf-8") as _fh:
+            turns = json.load(_fh)
+        unique_speakers = len({t["speaker"] for t in turns})
+        log(f"      Loaded {len(turns)} cached turns, {unique_speakers} speaker(s).")
+        return turns
+
     try:
         from pyannote.audio import Pipeline  # type: ignore
     except ImportError as exc:
@@ -55,6 +69,7 @@ def _diarize(
             "pyannote.audio is not installed. Run: pip install pyannote.audio"
         ) from exc
 
+    log("      Loading pyannote diarization pipeline…")
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
         token=hf_token,
@@ -65,19 +80,52 @@ def _diarize(
         import torch  # type: ignore
         if torch.backends.mps.is_available():
             pipeline.to(torch.device("mps"))
+            log("      Using MPS (Apple Silicon) for diarization.")
+        else:
+            log("      Using CPU for diarization.")
     except ImportError:
-        pass
+        log("      Using CPU for diarization (torch not available).")
 
     diarize_kwargs: dict = {}
     if num_speakers is not None:
         diarize_kwargs["num_speakers"] = num_speakers
+        log(f"      Running diarization (num_speakers={num_speakers})…")
+    else:
+        log("      Running diarization (auto-detecting speaker count)…")
+
+    # Hook pyannote's internal progress reporting into our log callback.
+    def _on_progress(sender, completed, total, **kwargs):
+        if total:
+            pct = int(100 * completed / total)
+            log(f"      [2b] Diarization progress: {completed}/{total} ({pct}%)")
+
+    pipeline.progress_hook = _on_progress
 
     diarization = pipeline(str(wav_path), **diarize_kwargs)
 
-    return [
-        {"start": turn.start, "end": turn.end, "speaker": speaker}
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
+    # pyannote.audio 4.x returns a DiarizeOutput dataclass; 3.x returns
+    # an Annotation directly.  Normalise both to an Annotation.
+    annotation = (
+        diarization.speaker_diarization
+        if hasattr(diarization, "speaker_diarization")
+        else diarization
+    )
+
+    turns = [
+        {"start": round(turn.start, 3), "end": round(turn.end, 3), "speaker": speaker}
+        for turn, _, speaker in annotation.itertracks(yield_label=True)
     ]
+    unique_speakers = len({t["speaker"] for t in turns})
+    log(f"      Diarization complete — {len(turns)} turns, {unique_speakers} speaker(s) detected.")
+
+    # Save checkpoint immediately so a later crash doesn't lose this work.
+    if diarize_cache_path is not None:
+        diarize_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(diarize_cache_path, "w", encoding="utf-8") as _fh:
+            json.dump(turns, _fh)
+        log(f"      Diarization cached → {diarize_cache_path}")
+
+    return turns
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +177,9 @@ def transcribe(
     model_name: str = "large-v3",
     language: str = "en",
     num_speakers: Optional[int] = None,
+    log=None,
+    whisper_cache_path: Optional[Path] = None,
+    diarize_cache_path: Optional[Path] = None,
 ) -> List[Segment]:
     """Transcribe *wav_path* and return diarized segments.
 
@@ -155,6 +206,9 @@ def transcribe(
     list of dict
         Each dict: ``{"start": float, "end": float, "speaker": str, "text": str}``.
     """
+    if log is None:
+        log = print
+
     try:
         import mlx_whisper  # type: ignore
     except ImportError as exc:
@@ -168,21 +222,43 @@ def transcribe(
     repo = _resolve_model(model_name)
 
     # --- Step 1: Transcription via mlx-whisper ---
-    result = mlx_whisper.transcribe(
-        str(wav_path),
-        path_or_hf_repo=repo,
-        language=language,
-        verbose=False,
-    )
-
-    whisper_segments = result.get("segments", [])
+    if whisper_cache_path is not None and whisper_cache_path.exists():
+        log(f"      [2a] Loading cached Whisper segments from {whisper_cache_path}…")
+        with open(whisper_cache_path, encoding="utf-8") as _fh:
+            whisper_segments = json.load(_fh)
+        log(f"      [2a] Loaded {len(whisper_segments)} cached segments (skipping Whisper).")
+    else:
+        log(f"      [2a] Starting Whisper transcription (model={repo}, language={language})…")
+        result = mlx_whisper.transcribe(
+            str(wav_path),
+            path_or_hf_repo=repo,
+            language=language,
+            verbose=False,
+        )
+        whisper_segments = result.get("segments", [])
+        log(f"      [2a] Whisper done — {len(whisper_segments)} raw segments.")
+        if whisper_cache_path is not None:
+            whisper_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(whisper_cache_path, "w", encoding="utf-8") as _fh:
+                json.dump(whisper_segments, _fh)
+            log(f"      [2a] Whisper segments cached → {whisper_cache_path}")
 
     # --- Step 2: Diarization via pyannote.audio (optional) ---
     diarize_segments: list = []
     if hf_token:
-        diarize_segments = _diarize(wav_path, hf_token, num_speakers=num_speakers)
+        log("      [2b] Starting speaker diarization…")
+        diarize_segments = _diarize(
+            wav_path,
+            hf_token,
+            num_speakers=num_speakers,
+            log=log,
+            diarize_cache_path=diarize_cache_path,
+        )
+    else:
+        log("      [2b] Skipping diarization (no HF token) — all segments labelled SPEAKER_00.")
 
     # --- Step 3: Merge transcription + diarization ---
+    log("      [2c] Merging transcription and speaker labels…")
     segments: List[Segment] = []
     for seg in whisper_segments:
         start = seg.get("start", 0.0)
@@ -199,6 +275,7 @@ def transcribe(
                 "text": text,
             }
         )
+    log(f"      [2c] Merge done — {len(segments)} segments with speaker labels.")
 
     return segments
 
